@@ -1,8 +1,11 @@
 import hashlib
 import os
+import datetime
+import random
+import string
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, String, Integer
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 
@@ -19,6 +22,23 @@ class User(Base):
     username = Column(String, unique=True, index=True)
     hashed_password = Column(String)
     salt = Column(String)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    last_action = Column(DateTime, default=datetime.datetime.utcnow)
+    level = Column(Integer, default=1)
+    wins = Column(Integer, default=0)
+    
+# Модель игровой сессии (лобби)
+class GameSession(Base):
+    __tablename__ = "game_sessions"
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, unique=True, index=True)
+    host_name = Column(String)
+    guest_name = Column(String, nullable=True)
+    status = Column(String, default="waiting") # waiting, playing, finished
+    settings = Column(JSON) # Настройки карты, юнитов и т.д.
+    current_turn = Column(String) # Имя игрока, чей сейчас ход
+    last_move = Column(JSON, nullable=True) # Данные о последнем сделанном ходе
+    last_update = Column(DateTime, default=datetime.datetime.utcnow)
 
 Base.metadata.create_all(bind=engine)
 
@@ -26,6 +46,18 @@ Base.metadata.create_all(bind=engine)
 class AuthRequest(BaseModel):
     username: str
     password: str
+
+class CreateGameRequest(BaseModel):
+    host_name: str
+    settings: dict
+
+class JoinGameRequest(BaseModel):
+    guest_name: str
+    code: str
+
+class MoveRequest(BaseModel):
+    username: str
+    move_data: dict
 
 app = FastAPI(title="TacticWar2 Auth Server")
 
@@ -66,7 +98,137 @@ def login(request: AuthRequest, db: Session = Depends(get_db)):
     if check_hash != db_user.hashed_password:
         raise HTTPException(status_code=401, detail="НЕВЕРНЫЙ ПАРОЛЬ")
     
-    return {"status": "ok", "username": db_user.username}
+    return {
+        "status": "ok", 
+        "username": db_user.username,
+        "created_at": db_user.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+        "level": db_user.level,
+        "wins": db_user.wins
+    }
+
+@app.get("/profile/{username}")
+def get_profile(username: str, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.username == username).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="ПОЛЬЗОВАТЕЛЬ НЕ НАЙДЕН")
+    
+    return {
+        "status": "ok",
+        "username": db_user.username,
+        "created_at": db_user.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+        "level": db_user.level,
+        "wins": db_user.wins
+    }
+
+@app.post("/report_win/{username}")
+def report_win(username: str, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.username == username).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="ПОЛЬЗОВАТЕЛЬ НЕ НАЙДЕН")
+    
+    db_user.wins += 1
+    # Добавим логику уровня: каждые 5 побед - новый уровень
+    db_user.level = 1 + (db_user.wins // 5)
+    db_user.last_action = datetime.datetime.utcnow()
+    
+    db.commit()
+    return {"status": "ok", "wins": db_user.wins, "level": db_user.level}
+
+@app.post("/log_action/{username}")
+def log_action(username: str, action: str, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.username == username).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="ПОЛЬЗОВАТЕЛЬ НЕ НАЙДЕН")
+    
+    db_user.last_action = datetime.datetime.utcnow()
+    # Здесь можно было бы сохранять саму строку действия в отдельную таблицу логов,
+    # но пока просто обновим время последней активности.
+    db.commit()
+    print(f"Action logged for {username}: {action}")
+    return {"status": "ok"}
+
+# --- МУЛЬТИПЛЕЕР ---
+
+@app.post("/create_game")
+def create_game(request: CreateGameRequest, db: Session = Depends(get_db)):
+    # Генерация уникального кода из 6 цифр
+    while True:
+        code = ''.join(random.choices(string.digits, k=6))
+        if not db.query(GameSession).filter(GameSession.code == code).first():
+            break
+            
+    new_session = GameSession(
+        code=code,
+        host_name=request.host_name,
+        settings=request.settings,
+        current_turn=request.host_name,
+        status="waiting"
+    )
+    db.add(new_session)
+    db.commit()
+    return {"status": "ok", "code": code}
+
+@app.post("/join_game")
+def join_game(request: JoinGameRequest, db: Session = Depends(get_db)):
+    session = db.query(GameSession).filter(GameSession.code == request.code).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="ИГРА НЕ НАЙДЕНА")
+    if session.guest_name:
+        raise HTTPException(status_code=400, detail="ИГРА УЖЕ ЗАПОЛНЕНА")
+    if session.host_name == request.guest_name:
+        raise HTTPException(status_code=400, detail="НЕЛЬЗЯ ИГРАТЬ С САМИМ СОБОЙ")
+        
+    session.guest_name = request.guest_name
+    session.status = "playing"
+    session.last_update = datetime.datetime.utcnow()
+    db.commit()
+    return {"status": "ok", "settings": session.settings, "host_name": session.host_name}
+
+@app.get("/game_status/{code}")
+def game_status(code: str, db: Session = Depends(get_db)):
+    session = db.query(GameSession).filter(GameSession.code == code).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="ИГРА НЕ НАЙДЕНА")
+        
+    return {
+        "status": session.status,
+        "host_name": session.host_name,
+        "guest_name": session.guest_name,
+        "current_turn": session.current_turn,
+        "last_move": session.last_move
+    }
+
+@app.post("/make_move/{code}")
+def make_move(code: str, request: MoveRequest, db: Session = Depends(get_db)):
+    session = db.query(GameSession).filter(GameSession.code == code).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="ИГРА НЕ НАЙДЕНА")
+    if session.current_turn != request.username:
+        raise HTTPException(status_code=400, detail="СЕЙЧАС НЕ ВАШ ХОД")
+        
+    session.last_move = request.move_data
+    # Передача хода
+    session.current_turn = session.guest_name if request.username == session.host_name else session.host_name
+    session.last_update = datetime.datetime.utcnow()
+    db.commit()
+    return {"status": "ok"}
+
+@app.post("/finish_game/{code}")
+def finish_game(code: str, db: Session = Depends(get_db)):
+    session = db.query(GameSession).filter(GameSession.code == code).first()
+    if session:
+        session.status = "finished"
+        db.commit()
+    return {"status": "ok"}
+
+@app.post("/start_game/{code}")
+def start_game(code: str, db: Session = Depends(get_db)):
+    session = db.query(GameSession).filter(GameSession.code == code).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="ИГРА НЕ НАЙДЕНА")
+    session.status = "playing"
+    db.commit()
+    return {"status": "ok"}
 
 if __name__ == "__main__":
     import uvicorn
