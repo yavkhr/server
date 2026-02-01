@@ -164,17 +164,18 @@ def create_game(request: CreateGameRequest, db: Session = Depends(get_db)):
         if not db.query(GameSession).filter(GameSession.code == code).first():
             break
             
+    game_seed = random.randint(0, 1000000)
     new_session = GameSession(
         code=code,
         host_name=request.host_name,
         settings=request.settings,
-        seed=random.randint(0, 1000000),
+        seed=game_seed,
         current_turn=request.host_name,
         status="waiting"
     )
     db.add(new_session)
     db.commit()
-    return {"status": "ok", "code": code}
+    return {"status": "ok", "code": code, "seed": game_seed}
 
 @app.post("/join_game")
 def join_game(request: JoinGameRequest, db: Session = Depends(get_db)):
