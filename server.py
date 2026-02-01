@@ -58,6 +58,7 @@ class JoinGameRequest(BaseModel):
 class MoveRequest(BaseModel):
     username: str
     move_data: dict
+    end_turn: bool = False
 
 app = FastAPI(title="TacticWar2 Auth Server")
 
@@ -206,8 +207,11 @@ def make_move(code: str, request: MoveRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="СЕЙЧАС НЕ ВАШ ХОД")
         
     session.last_move = request.move_data
-    # Передача хода
-    session.current_turn = session.guest_name if request.username == session.host_name else session.host_name
+    
+    # Передача хода только если end_turn=True
+    if request.end_turn:
+        session.current_turn = session.guest_name if request.username == session.host_name else session.host_name
+        
     session.last_update = datetime.datetime.utcnow()
     db.commit()
     return {"status": "ok"}
