@@ -179,7 +179,6 @@ def join_game(request: JoinGameRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="НЕЛЬЗЯ ИГРАТЬ С САМИМ СОБОЙ")
         
     session.guest_name = request.guest_name
-    session.status = "playing"
     session.last_update = datetime.datetime.utcnow()
     db.commit()
     return {"status": "ok", "settings": session.settings, "host_name": session.host_name}
@@ -226,9 +225,13 @@ def start_game(code: str, db: Session = Depends(get_db)):
     session = db.query(GameSession).filter(GameSession.code == code).first()
     if not session:
         raise HTTPException(status_code=404, detail="ИГРА НЕ НАЙДЕНА")
+    
     session.status = "playing"
+    # Случайный выбор первого игрока
+    session.current_turn = random.choice([session.host_name, session.guest_name])
+    session.last_update = datetime.datetime.utcnow()
     db.commit()
-    return {"status": "ok"}
+    return {"status": "ok", "first_turn": session.current_turn}
 
 if __name__ == "__main__":
     import uvicorn
