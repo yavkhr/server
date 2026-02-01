@@ -36,8 +36,10 @@ class GameSession(Base):
     guest_name = Column(String, nullable=True)
     status = Column(String, default="waiting") # waiting, playing, finished
     settings = Column(JSON) # Настройки карты, юнитов и т.д.
+    seed = Column(Integer) # Сид для генерации мира
     current_turn = Column(String) # Имя игрока, чей сейчас ход
     last_move = Column(JSON, nullable=True) # Данные о последнем сделанном ходе
+    board_state = Column(JSON, nullable=True) # Полное состояние поля (юниты, позиции, hp)
     last_update = Column(DateTime, default=datetime.datetime.utcnow)
 
 Base.metadata.create_all(bind=engine)
@@ -59,6 +61,10 @@ class MoveRequest(BaseModel):
     username: str
     move_data: dict
     end_turn: bool = False
+
+class BoardUpdateRequest(BaseModel):
+    username: str
+    board_state: dict
 
 app = FastAPI(title="TacticWar2 Auth Server")
 
@@ -162,6 +168,7 @@ def create_game(request: CreateGameRequest, db: Session = Depends(get_db)):
         code=code,
         host_name=request.host_name,
         settings=request.settings,
+        seed=random.randint(0, 1000000),
         current_turn=request.host_name,
         status="waiting"
     )
@@ -182,7 +189,7 @@ def join_game(request: JoinGameRequest, db: Session = Depends(get_db)):
     session.guest_name = request.guest_name
     session.last_update = datetime.datetime.utcnow()
     db.commit()
-    return {"status": "ok", "settings": session.settings, "host_name": session.host_name}
+    return {"status": "ok", "settings": session.settings, "host_name": session.host_name, "seed": session.seed}
 
 @app.get("/game_status/{code}")
 def game_status(code: str, db: Session = Depends(get_db)):
@@ -195,8 +202,25 @@ def game_status(code: str, db: Session = Depends(get_db)):
         "host_name": session.host_name,
         "guest_name": session.guest_name,
         "current_turn": session.current_turn,
-        "last_move": session.last_move
+        "last_move": session.last_move,
+        "board_state": session.board_state,
+        "seed": session.seed
     }
+
+@app.post("/update_board/{code}")
+def update_board(code: str, request: BoardUpdateRequest, db: Session = Depends(get_db)):
+    session = db.query(GameSession).filter(GameSession.code == code).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="ИГРА НЕ НАЙДЕНА")
+    
+    # Можно добавить проверку, что обновлять может только текущий игрок
+    # if session.current_turn != request.username:
+    #     raise HTTPException(status_code=400, detail="СЕЙЧАС НЕ ВАШ ХОД")
+        
+    session.board_state = request.board_state
+    session.last_update = datetime.datetime.utcnow()
+    db.commit()
+    return {"status": "ok"}
 
 @app.post("/make_move/{code}")
 def make_move(code: str, request: MoveRequest, db: Session = Depends(get_db)):
