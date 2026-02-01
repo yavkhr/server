@@ -214,11 +214,21 @@ def update_board(code: str, request: BoardUpdateRequest, db: Session = Depends(g
     if not session:
         raise HTTPException(status_code=404, detail="ИГРА НЕ НАЙДЕНА")
     
-    # Можно добавить проверку, что обновлять может только текущий игрок
-    # if session.current_turn != request.username:
-    #     raise HTTPException(status_code=400, detail="СЕЙЧАС НЕ ВАШ ХОД")
-        
+    # Обновляем состояние доски
     session.board_state = request.board_state
+    
+    # Синхронизируем текущий ход из board_state, если он там есть
+    if request.board_state and isinstance(request.board_state, dict):
+        # Если пришел флаг host_turn (кто сейчас ходит по мнению клиента)
+        # Мы доверяем хосту в плане переключения ходов
+        client_turn = request.board_state.get('turn')
+        if client_turn:
+            # Превращаем 'blue'/'red' обратно в имена пользователей
+            if client_turn == 'blue':
+                session.current_turn = session.host_name
+            elif client_turn == 'red':
+                session.current_turn = session.guest_name
+                
     session.last_update = datetime.datetime.utcnow()
     db.commit()
     return {"status": "ok"}
