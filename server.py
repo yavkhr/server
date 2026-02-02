@@ -259,6 +259,14 @@ def finish_game(code: str, db: Session = Depends(get_db)):
         db.commit()
     return {"status": "ok"}
 
+@app.post("/abort_game/{code}")
+def abort_game(code: str, db: Session = Depends(get_db)):
+    session = db.query(GameSession).filter(GameSession.code == code).first()
+    if session:
+        session.status = "aborted"
+        db.commit()
+    return {"status": "ok"}
+
 @app.post("/start_game/{code}")
 def start_game(code: str, db: Session = Depends(get_db)):
     session = db.query(GameSession).filter(GameSession.code == code).first()
