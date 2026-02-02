@@ -1,3 +1,8 @@
+pygame-ce>=2.5.0
 fastapi
 uvicorn
 sqlalchemy
+pydantic
+requests
+cryptography
+python-multipart
