@@ -6,3 +6,5 @@ pydantic
 requests
 cryptography
 python-multipart
+pyinstaller
+gunicorn
