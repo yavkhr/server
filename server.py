@@ -10,7 +10,9 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 
 # Настройка базы данных SQLite
-DB_PATH = "database.db"
+# На Render используем путь из переменной окружения DATABASE_URL или локальный файл
+# Если DATABASE_URL не задан, используем database.db в текущей папке
+DB_PATH = os.environ.get("DATABASE_PATH", "database.db")
 engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -267,6 +269,20 @@ def abort_game(code: str, db: Session = Depends(get_db)):
         db.commit()
     return {"status": "ok"}
 
+@app.post("/exit_lobby/{code}")
+def exit_lobby(code: str, username: str, db: Session = Depends(get_db)):
+    session = db.query(GameSession).filter(GameSession.code == code).first()
+    if session:
+        if session.host_name == username:
+            # Если хост выходит, отменяем игру
+            session.status = "aborted"
+        elif session.guest_name == username:
+            # Если гость выходит, освобождаем место
+            session.guest_name = None
+            session.status = "waiting"
+        db.commit()
+    return {"status": "ok"}
+
 @app.post("/start_game/{code}")
 def start_game(code: str, db: Session = Depends(get_db)):
     session = db.query(GameSession).filter(GameSession.code == code).first()
@@ -282,4 +298,6 @@ def start_game(code: str, db: Session = Depends(get_db)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+    # Используем порт из переменной окружения PORT (для Render) или 5000 по умолчанию
+    port = int(os.environ.get("PORT", 5000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
